@@ -3,14 +3,19 @@ import pandas as pd
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+import plotly.express as px
 
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
-from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
-from nautilus_trader.examples.strategies.ema_cross_twap import EMACrossTWAP
-from nautilus_trader.examples.strategies.ema_cross_twap import EMACrossTWAPConfig
+from nautilus_trader.model.data import BarSpecification, BarAggregation
+from nautilus_trader.model.enums import PriceType
+#from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
+#from nautilus_trader.examples.strategies.ema_cross_twap import EMACrossTWAP
+#from nautilus_trader.examples.strategies.ema_cross_twap import EMACrossTWAPConfig
+from strategies.ema_cross import EMACross, EMACrossConfig
 from nautilus_trader.model import BarType
+from nautilus_trader.model.enums import AggregationSource
 from nautilus_trader.model import Money
 from nautilus_trader.model import TraderId
 from nautilus_trader.model import Venue
@@ -21,37 +26,27 @@ from nautilus_trader.persistence.wranglers import BarDataWrangler
 from nautilus_trader.test_kit.providers import TestDataProvider
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.providers import CSVBarDataLoader
+from futures_contracts import ES
 
 # %%
-
-df = pd.read_parquet("aggregated_60min.parquet", engine="pyarrow")
-
-# %%
-# Process quotes using a wrangler
-
-
-#trades_df = provider.read_csv_ticks("./data/ES_2025.01.15.txt")
-#EURUSD = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-#wrangler = QuoteTickDataWrangler(EURUSD)
-#
-#ticks = wrangler.process(df)
-#trades_df = provider.read_csv_ticks("./data/ES_2025.01.15.txt")
-
-# Initialize the instrument which matches the data
-ES_FUTURE = TestInstrumentProvider.es_future(2025,6)
-print('es instru:', ES_FUTURE)
-# ETHUSDT_BINANCE = TestInstrumentProvider.ethusdt_binance()
-
-# Process into Nautilus objects
-# wrangler = TradeTickDataWrangler(instrument=ES_FUTURES)
-# ticks = wrangler.process(trades_df)
-print('Data wrangling...')
-wrangler = BarDataWrangler(instrument=ES_FUTURE, bar_type=BarType.from_str("ESM5.GLBX-60-MINUTE-LAST-EXTERNAL"))
-
+print('Loading data...')
+parquet_filename = './data/ES_2025_60min.parquet'
+df = pd.read_parquet(parquet_filename, engine="pyarrow")
+contract_year = 2025
+contract_month = 6
+#ES_FUTURE = TestInstrumentProvider.es_future(contract_year, contract_month)
+instrument = ES()
+bar_spec = BarSpecification(60, BarAggregation.MINUTE, PriceType.LAST)
+#bar_type = BarType.from_str("ESM5.GLBX-60-MINUTE-LAST-EXTERNAL")
+bar_type = BarType(instrument_id=instrument.id, bar_spec=bar_spec, aggregation_source=AggregationSource.EXTERNAL)
+#wrangler = BarDataWrangler(instrument=ES_FUTURE, bar_type=))
+wrangler = BarDataWrangler(instrument=instrument, bar_type=bar_type)
 bars = wrangler.process(df)
+print('Data loaded successfully')
 
 # %%
 # Configure backtest engine
+print('Configuring backtest engine...')
 config = BacktestEngineConfig(
     trader_id=TraderId("BACKTESTER-001"),
     logging=LoggingConfig(
@@ -77,31 +72,31 @@ engine.add_venue(
 
 #%%
 # Add instrument(s)
-engine.add_instrument(ES_FUTURE)
+engine.add_instrument(instrument)
 
 # Add data
 engine.add_data(bars)
 # %%
 # Configure your strategy
-strategy_config = EMACrossTWAPConfig(
-    instrument_id=ES_FUTURE.id,
-    bar_type=BarType.from_str("ESM5.GLBX-60-MINUTE-LAST-EXTERNAL"),
+
+strategy_config = EMACrossConfig(
+    instrument_id=instrument.id,
+    #bar_type=BarType.from_str("ESM5.GLBX-60-MINUTE-LAST-EXTERNAL"),
+    bar_type=BarType(instrument_id=instrument.id, bar_spec=bar_spec, aggregation_source=AggregationSource.EXTERNAL),
     trade_size=Decimal("1"),
     fast_ema_period=10,
-    slow_ema_period=20,
-    twap_horizon_secs=10.0,
-    twap_interval_secs=2.5,
+    slow_ema_period=20
 )
 
 # Instantiate and add your strategy
-strategy = EMACrossTWAP(config=strategy_config)
+strategy = EMACross(config=strategy_config)
 engine.add_strategy(strategy=strategy)
 
 
 # %%
 # Instantiate and add your execution algorithm
-exec_algorithm = TWAPExecAlgorithm()  # Using defaults
-engine.add_exec_algorithm(exec_algorithm)
+#exec_algorithm = TWAPExecAlgorithm()  # Using defaults
+#engine.add_exec_algorithm(exec_algorithm)
 
 # %%
 # Run the engine (from start to end of data)
@@ -110,17 +105,35 @@ engine.run()
 
 # %%
 account_report = engine.trader.generate_account_report(GLOBEX)
-print('\nAccount report:')
-print(account_report)
+account_report
 
 # %%
-print('\nOrder fills report:')
-print(engine.trader.generate_order_fills_report())
+#print('\nOrder fills report:')
+orders_report = engine.trader.generate_order_fills_report()
 
 # %%
-print('\nPositions report:')
-print(engine.trader.generate_positions_report())
+#print('\nPositions report:')
+positions_report =engine.trader.generate_positions_report()
+positions_report
 
+#%%
+returns = strategy.portfolio.analyzer.get_performance_stats_returns()
+#print('\nPerformance stats returns:')
+returns
+
+general_stats = strategy.portfolio.analyzer.get_performance_stats_pnls()
+print('\nGeneral stats:')
+print(general_stats)
+
+#%%
+positions_report['cum_profits'] = positions_report['realized_pnl'].str.replace(' USD', '', regex=False).astype(float)
+equity = positions_report[['ts_closed', 'cum_profits']]
+
+#%%
+fig = px.line(equity, x='ts_closed', y='cum_profits', title='Strategy Equity Curve',
+              labels={'ts_closed': 'ts_closed', 'Equity': 'Cumulative Profit'})
+fig.update_layout(xaxis_title='ts_closed', yaxis_title='Cumulative Profit')
+fig.show()
 
 # %%
 # For repeated backtest runs make sure to reset the engine. Avoids having to reload the data

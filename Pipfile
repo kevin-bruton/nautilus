@@ -9,6 +9,10 @@ python-dotenv = "*"
 pandas = "*"
 pyarrow = "*"
 nautilus-trader = "*"
+plotly = "*"
+ipython = "*"
+nbformat = "*"
+yfinance = "*"
 ta-lib = "*"
 
 [dev-packages]

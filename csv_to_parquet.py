@@ -2,6 +2,9 @@
 from pathlib import Path
 from nautilus_trader.test_kit.providers import CSVBarDataLoader
 
+instr_filename_contains = "ES_2025"
+timeframe = "60min"
+
 # %%
 # Check for data files
 DATA_DIR = "./data/"
@@ -12,10 +15,9 @@ raw_files
 
 #%%
 # get file for the instrument we want to backtest
-instr_key = "ES_2025"
-file_paths = [rf for rf in raw_files if 'ES_' in str(rf)]
+file_paths = [rf for rf in raw_files if instr_filename_contains in str(rf)]
 if len(file_paths) == 0:
-    raise ValueError(f"Unable to find any files for instrument {instr_key}")
+    raise ValueError(f"Unable to find any files for instrument {instr_filename_contains}")
 else:
     file_path = file_paths[0]
 # %%
@@ -36,14 +38,14 @@ df['Volume'] = df['Up'] + df['Down']
 df = df.sort_index()
 
 #%%
-df_60min = df.resample("60min").agg({
+df = df.resample(timeframe).agg({
     "Open": "first",
     "High": "max",
     "Low": "min",
     "Close": "last",
     "Volume": "sum"
 }).dropna()
-df_60min.to_parquet("aggregated_60min.parquet", engine="pyarrow", compression="snappy")
+df.to_parquet(Path(f"{DATA_DIR}/{instr_filename_contains}_{timeframe}.parquet"), engine="pyarrow", compression="snappy")
 
 
 # %%
